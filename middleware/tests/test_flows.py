@@ -219,3 +219,43 @@ async def test_widget_simulated_chat(client):
 async def test_widget_rejects_bad_token(client):
     r = await client.post("/api/v1/widget/chat/start", headers={"Authorization": "Bearer nope"})
     assert r.status_code == 401
+
+
+async def test_widget_retell_chat_shows_one_greeting(client, monkeypatch):
+    from app.config import get_settings
+    from app.services import retell_api
+
+    monkeypatch.setenv("RETELL_MEMBER_CHAT_AGENT_ID", "agent_member_chat")
+    get_settings.cache_clear()
+    sent: dict = {}
+    replies = [
+        # The agent's begin message ({{greeting}}) arrives with its first reply...
+        lambda: [sent["dv"]["greeting"], "You can download your ID card from the portal."],
+        # ...or on its own, in which case the question is asked again.
+        lambda: [sent["dv"]["greeting"]],
+        lambda: ["Your deductible has $350.00 left."],
+    ]
+
+    async def create_chat(agent_id, dynamic_variables, metadata):
+        sent["dv"] = dynamic_variables
+        return {"chat_id": f"chat_{len(replies)}", "message_with_tool_calls": []}
+
+    async def create_chat_completion(chat_id, content):
+        return {"messages": [{"role": "agent", "content": c} for c in replies.pop(0)()]}
+
+    monkeypatch.setattr(retell_api, "create_chat", create_chat)
+    monkeypatch.setattr(retell_api, "create_chat_completion", create_chat_completion)
+    tok = (await client.post("/api/v1/demo/portal-token", json={"persona_key": "member-sarah"})).json()["token"]
+    h = {"Authorization": f"Bearer {tok}"}
+    try:
+        start = (await client.post("/api/v1/widget/chat/start", headers=h)).json()
+        assert start["mode"] == "retell" and "Sarah" in start["greeting"]
+        assert sent["dv"]["greeting"] == start["greeting"]
+        msg = (await client.post(f"/api/v1/widget/chat/{start['chat_id']}/messages", headers=h, json={"content": "ID card"})).json()
+        assert [m["content"] for m in msg["messages"]] == ["You can download your ID card from the portal."]
+
+        start = (await client.post("/api/v1/widget/chat/start", headers=h)).json()
+        msg = (await client.post(f"/api/v1/widget/chat/{start['chat_id']}/messages", headers=h, json={"content": "deductible"})).json()
+        assert [m["content"] for m in msg["messages"]] == ["Your deductible has $350.00 left."]
+    finally:
+        get_settings.cache_clear()
