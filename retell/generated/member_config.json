@@ -1,0 +1,299 @@
+{
+  "llm": {
+    "general_prompt": "## Identity\nYou are the AI member services assistant for {{payer_name}}. You help health plan members on the phone, in a web voice session, or in web chat. You are warm, concise and plain-spoken. You are an AI and say so if asked. You are not a nurse, doctor or lawyer.\n\n## Conversation context\n- Channel: {{channel}}\n- Caller already verified by the member portal: {{caller_verified}}\n- Caller ID matched a member on file: {{ani_match}}\n- Member's first name (only present when verified by the portal): {{first_name}}\n- Business hours for human representatives: {{business_hours}}\n- {{plan_year_note}}\n\n## Identity verification (HIPAA)\nYou must not share any account, coverage, claim or authorization information until the caller is verified.\n1. If {{caller_verified}} is \"true\", the member is already verified. Do not ask for verification again.\n2. Otherwise, before answering any account question, verify:\n   - If {{ani_match}} is \"true\", say you see they're calling from a number on file and ask only for their date of birth. Call `verify_member_identity` with `date_of_birth` only.\n   - If {{ani_match}} is \"false\", ask for the member ID from their insurance card and their date of birth. Call `verify_member_identity` with both.\n3. If verification fails, say the information didn't match without saying which part was wrong. After the tool reports zero attempts remaining, or returns `locked`, offer to transfer to a representative.\n4. Never repeat back a full date of birth, member ID, or any Social Security number. If a caller volunteers an SSN, tell them you don't need it.\n5. Only discuss the verified member's own information. If the caller asks about a spouse, child or another person, explain that person needs to call themselves or the subscriber must have authorization on file, and offer a transfer.\n\n## What you can do (tools)\n- `get_coverage_and_accumulators`: coverage status, plan, primary care physician, deductible and out-of-pocket totals, met and remaining.\n- `check_claim_status`: status of a claim by claim number. With no claim number it lists the most recent claims.\n- `check_procedure_coverage`: whether a procedure (CPT code) is covered, the cost share, and whether prior authorization or a referral is required. If the caller doesn't know the code, describe what you need and suggest they ask their provider's office for the CPT code.\n- `get_prior_authorizations`: status of the member's prior authorizations.\n- `create_service_request`: log a request for a human follow-up (address change, ID card, billing dispute, anything you cannot finish).\n- `transfer_to_member_services`: warm transfer to a licensed representative.\n- `end_call`: end the call politely when the caller is done.\n\n## How to answer\n- Use each tool result's `summary` as the source of truth. Never invent figures, dates, claim numbers or coverage decisions. If a tool reports `core_unavailable`, apologize, don't guess, and offer a service request or transfer.\n- Say dollar amounts naturally (\"three hundred fifty dollars\"), dates naturally (\"August fourteenth\"), and spell claim and reference numbers character by character only when the caller asks.\n- Benefit answers are estimates, not a guarantee of payment. Say so once when quoting cost share.\n- Keep answers short: one or two sentences, then ask if there's anything else.\n\n## Always transfer (do not try to resolve)\nTransfer with `transfer_to_member_services` when the caller asks for a person, or the topic is any of: {{escalation_topics}}. Before transferring, summarize in one sentence what you'll pass on.\nIf the caller describes a medical emergency, tell them to hang up and dial 911. For clinical questions, offer the nurse line at {{nurse_line_number}}.\n\n## Guardrails\n- Do not give medical advice, diagnose, or recommend treatments or specific providers beyond what tools return.\n- Do not promise approvals, payments or timelines that a tool didn't state.\n- If you are unsure, say so and offer a transfer.\n",
+    "begin_message": "{{greeting}}",
+    "start_speaker": "agent",
+    "general_tools": [
+      {
+        "type": "custom",
+        "name": "verify_member_identity",
+        "description": "Verify the caller's identity. Required before any account information. Pass member_id unless caller ID matched (ani_match is true).",
+        "url": "https://YOUR-PUBLIC-MIDDLEWARE-URL/api/v1/retell/tools/verify_member_identity",
+        "method": "POST",
+        "parameter_type": "json",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "member_id": {
+              "type": "string",
+              "description": "Member ID from the insurance card, e.g. MEM-987654."
+            },
+            "date_of_birth": {
+              "type": "string",
+              "description": "Caller's date of birth as YYYY-MM-DD."
+            }
+          },
+          "required": [
+            "date_of_birth"
+          ]
+        },
+        "speak_after_execution": true,
+        "speak_during_execution": false,
+        "timeout_ms": 8000,
+        "max_retry": 0
+      },
+      {
+        "type": "custom",
+        "name": "get_coverage_and_accumulators",
+        "description": "Get the verified member's coverage status, plan, primary care physician, and deductible and out-of-pocket totals.",
+        "url": "https://YOUR-PUBLIC-MIDDLEWARE-URL/api/v1/retell/tools/get_coverage_and_accumulators",
+        "method": "POST",
+        "parameter_type": "json",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "speak_after_execution": true,
+        "speak_during_execution": true,
+        "timeout_ms": 8000,
+        "max_retry": 0,
+        "execution_message_description": "One moment while I look that up.",
+        "execution_message_type": "static_text"
+      },
+      {
+        "type": "custom",
+        "name": "check_claim_status",
+        "description": "Look up a claim by claim number for the verified member. Omit claim_id to list recent claims.",
+        "url": "https://YOUR-PUBLIC-MIDDLEWARE-URL/api/v1/retell/tools/check_claim_status",
+        "method": "POST",
+        "parameter_type": "json",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "Claim number, e.g. CLM-112233."
+            }
+          },
+          "required": []
+        },
+        "speak_after_execution": true,
+        "speak_during_execution": true,
+        "timeout_ms": 8000,
+        "max_retry": 0,
+        "execution_message_description": "One moment while I look that up.",
+        "execution_message_type": "static_text"
+      },
+      {
+        "type": "custom",
+        "name": "check_procedure_coverage",
+        "description": "Check if a procedure is covered, the cost share, and whether prior authorization or a referral is needed.",
+        "url": "https://YOUR-PUBLIC-MIDDLEWARE-URL/api/v1/retell/tools/check_procedure_coverage",
+        "method": "POST",
+        "parameter_type": "json",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cpt_code": {
+              "type": "string",
+              "description": "Five-digit CPT code."
+            },
+            "provider_npi": {
+              "type": "string",
+              "description": "Optional 10-digit NPI of the provider, to apply network status."
+            }
+          },
+          "required": [
+            "cpt_code"
+          ]
+        },
+        "speak_after_execution": true,
+        "speak_during_execution": true,
+        "timeout_ms": 8000,
+        "max_retry": 0,
+        "execution_message_description": "One moment while I look that up.",
+        "execution_message_type": "static_text"
+      },
+      {
+        "type": "custom",
+        "name": "get_prior_authorizations",
+        "description": "List the verified member's prior authorizations and their status.",
+        "url": "https://YOUR-PUBLIC-MIDDLEWARE-URL/api/v1/retell/tools/get_prior_authorizations",
+        "method": "POST",
+        "parameter_type": "json",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "speak_after_execution": true,
+        "speak_during_execution": true,
+        "timeout_ms": 8000,
+        "max_retry": 0,
+        "execution_message_description": "One moment while I look that up.",
+        "execution_message_type": "static_text"
+      },
+      {
+        "type": "custom",
+        "name": "create_service_request",
+        "description": "Create a service request for human follow-up when you cannot complete the caller's request.",
+        "url": "https://YOUR-PUBLIC-MIDDLEWARE-URL/api/v1/retell/tools/create_service_request",
+        "method": "POST",
+        "parameter_type": "json",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string",
+              "description": "Short category, e.g. id_card, address_change, billing_dispute, escalation."
+            },
+            "summary": {
+              "type": "string",
+              "description": "One or two sentence summary of what the caller needs. No SSN or full DOB."
+            }
+          },
+          "required": [
+            "category",
+            "summary"
+          ]
+        },
+        "speak_after_execution": true,
+        "speak_during_execution": true,
+        "timeout_ms": 8000,
+        "max_retry": 0,
+        "execution_message_description": "Let me create that request for you.",
+        "execution_message_type": "static_text"
+      },
+      {
+        "type": "transfer_call",
+        "name": "transfer_to_member_services",
+        "description": "Warm transfer to a licensed member services representative. Use when asked for a person or for escalation topics.",
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "{{transfer_number}}"
+        },
+        "transfer_option": {
+          "type": "warm_transfer",
+          "show_transferee_as_caller": true,
+          "on_hold_music": "relaxing_sound",
+          "private_handoff_option": {
+            "type": "prompt",
+            "prompt": "In two sentences, tell the representative who is calling (first name and whether they were verified), what they asked about, and what you already told them. Never include a full date of birth or SSN."
+          }
+        }
+      },
+      {
+        "type": "end_call",
+        "name": "end_call",
+        "description": "End the call when the caller says goodbye or has nothing else."
+      }
+    ],
+    "default_dynamic_variables": {
+      "payer_name": "Acme Health Plan",
+      "persona": "member",
+      "greeting": "Thanks for calling. I'm an AI assistant. How can I help?",
+      "business_hours": "Monday to Friday, 8 AM to 8 PM Eastern",
+      "transfer_number": "+15555550150",
+      "nurse_line_number": "+15555550170",
+      "escalation_topics": "appeals, grievances, complaints",
+      "plan_year_note": "",
+      "caller_verified": "false",
+      "ani_match": "false",
+      "channel": "phone",
+      "first_name": ""
+    },
+    "model_temperature": 0.2
+  },
+  "voice_agent": {
+    "agent_name": "Payer AI - Member Services",
+    "webhook_url": "https://YOUR-PUBLIC-MIDDLEWARE-URL/api/v1/retell/webhook",
+    "data_storage_setting": "everything_except_pii",
+    "pii_config": {
+      "mode": "post_call",
+      "categories": [
+        "ssn",
+        "credit_card",
+        "bank_account",
+        "password",
+        "pin",
+        "date_of_birth",
+        "driver_license",
+        "passport"
+      ]
+    },
+    "post_call_analysis_data": [
+      {
+        "type": "enum",
+        "name": "primary_intent",
+        "description": "The caller's main reason for contacting us.",
+        "choices": [
+          "claim_status",
+          "benefits",
+          "deductible_accumulators",
+          "eligibility",
+          "prior_authorization",
+          "id_card_or_demographics",
+          "billing_dispute",
+          "appeal_or_grievance",
+          "other"
+        ]
+      },
+      {
+        "type": "boolean",
+        "name": "resolved_without_human",
+        "description": "True if the caller's need was fully handled by the AI without a transfer."
+      },
+      {
+        "type": "string",
+        "name": "follow_up_needed",
+        "description": "Any follow-up the plan owes the caller, in one sentence, or 'none'. No SSN or DOB."
+      }
+    ],
+    "voice_id": "11labs-Adrian",
+    "webhook_events": [
+      "call_started",
+      "call_ended",
+      "call_analyzed",
+      "transfer_started",
+      "transfer_bridged",
+      "transfer_ended"
+    ]
+  },
+  "chat_agent": {
+    "agent_name": "Payer AI - Member Services Chat",
+    "webhook_url": "https://YOUR-PUBLIC-MIDDLEWARE-URL/api/v1/retell/webhook",
+    "data_storage_setting": "everything_except_pii",
+    "pii_config": {
+      "mode": "post_call",
+      "categories": [
+        "ssn",
+        "credit_card",
+        "bank_account",
+        "password",
+        "pin",
+        "date_of_birth",
+        "driver_license",
+        "passport"
+      ]
+    },
+    "post_call_analysis_data": [
+      {
+        "type": "enum",
+        "name": "primary_intent",
+        "description": "The caller's main reason for contacting us.",
+        "choices": [
+          "claim_status",
+          "benefits",
+          "deductible_accumulators",
+          "eligibility",
+          "prior_authorization",
+          "id_card_or_demographics",
+          "billing_dispute",
+          "appeal_or_grievance",
+          "other"
+        ]
+      },
+      {
+        "type": "boolean",
+        "name": "resolved_without_human",
+        "description": "True if the caller's need was fully handled by the AI without a transfer."
+      },
+      {
+        "type": "string",
+        "name": "follow_up_needed",
+        "description": "Any follow-up the plan owes the caller, in one sentence, or 'none'. No SSN or DOB."
+      }
+    ]
+  }
+}
