@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Widget Embed Example</title>
+  <style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 16px;color:#1e293b}</style>
+</head>
+<body>
+  <h1>Any payer web page</h1>
+  <p>This plain HTML page loads the widget the way a payer's portal would. The portal's backend
+     signs a short-lived identity token for its logged-in user; here the demo endpoint does it.</p>
+
+  <script src="/widget/payer-assistant.js"></script>
+  <script>
+    PayerAssistant.mount({
+      apiBase: "",  // middleware origin; empty = same origin
+      getPortalToken: () =>
+        fetch("/api/v1/demo/portal-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ persona_key: "member-miguel" }),
+        }).then((r) => r.json()).then((d) => d.token),
+    });
+  </script>
+</body>
+</html>
