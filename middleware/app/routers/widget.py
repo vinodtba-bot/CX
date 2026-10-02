@@ -23,8 +23,9 @@ from ..services.tools import ToolContext
 router = APIRouter(prefix="/api/v1/widget", tags=["widget"])
 
 # Greeting the widget already showed for each Retell chat, until its first
-# reply. A Retell chat agent with a begin message may send that message with
-# its first reply; it's dropped here so the member sees one greeting.
+# reply. A Retell chat agent may send its begin message with its first reply,
+# or (with a blank begin message) nothing at all; either way the member should
+# see one greeting and an answer to their first question.
 _SHOWN_GREETINGS: dict[str, str] = {}
 
 
@@ -163,12 +164,12 @@ async def send_chat_message(chat_id: str, body: ChatMessageIn,
         replies = _agent_text((await retell_api.create_chat_completion(chat_id, body.content)).get("messages", []))
         shown = _SHOWN_GREETINGS.pop(chat_id, None)
         if shown is not None:
-            unseen = [r for r in replies if _norm(r) != _norm(shown)]
-            if replies and not unseen:
-                # The first reply was only the begin message: the agent greeted
+            replies = [r for r in replies if _norm(r) != _norm(shown)]
+            if not replies:
+                # The first turn produced only the begin message (or nothing, when
+                # the agent's begin message is blank): the agent opened the chat
                 # instead of answering, so ask again to get the actual answer.
-                unseen = _agent_text((await retell_api.create_chat_completion(chat_id, body.content)).get("messages", []))
-            replies = unseen
+                replies = _agent_text((await retell_api.create_chat_completion(chat_id, body.content)).get("messages", []))
     except retell_api.RetellAPIError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Assistant is unavailable") from e
     return {"messages": [{"role": "agent", "content": r} for r in replies]}

@@ -234,6 +234,9 @@ async def test_widget_retell_chat_shows_one_greeting(client, monkeypatch):
         # ...or on its own, in which case the question is asked again.
         lambda: [sent["dv"]["greeting"]],
         lambda: ["Your deductible has $350.00 left."],
+        # A blank begin message: the first turn comes back empty.
+        lambda: [],
+        lambda: ["Your ID card was mailed on September 3."],
     ]
 
     async def create_chat(agent_id, dynamic_variables, metadata):
@@ -257,5 +260,9 @@ async def test_widget_retell_chat_shows_one_greeting(client, monkeypatch):
         start = (await client.post("/api/v1/widget/chat/start", headers=h)).json()
         msg = (await client.post(f"/api/v1/widget/chat/{start['chat_id']}/messages", headers=h, json={"content": "deductible"})).json()
         assert [m["content"] for m in msg["messages"]] == ["Your deductible has $350.00 left."]
+
+        start = (await client.post("/api/v1/widget/chat/start", headers=h)).json()
+        msg = (await client.post(f"/api/v1/widget/chat/{start['chat_id']}/messages", headers=h, json={"content": "ID card status"})).json()
+        assert [m["content"] for m in msg["messages"]] == ["Your ID card was mailed on September 3."]
     finally:
         get_settings.cache_clear()
