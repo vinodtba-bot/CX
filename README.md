@@ -65,6 +65,7 @@ Frontend dev server instead of nginx: `cd frontend && npm ci && npm run dev` (ht
    ```
    It prints four agent IDs; add them to `.env` and `docker compose up -d middleware`.
    Use `--dry-run` to only write `retell/generated/*.json` if you'd rather paste into the dashboard.
+   Using agents you already made in the Retell dashboard instead? Put their IDs in `.env` (`RETELL_MEMBER_CHAT_AGENT_ID` and so on), paste `retell/prompts/member_services.md` (or `provider_services.md`) into the agent's prompt, set its begin message to `{{greeting}}` so it greets with the payer name and the member's first name, and add the tools from `retell/generated/*_config.json`. Without the tools the agent can't look anything up.
 4. Test: call the member number from a phone listed in `mock-facets/mock_facets/data.py` (or any phone and give member ID `MEM-987654`, DOB March 12 1984), or use the portal's Talk tab.
 
 Sample data to try: members `MEM-987654` (Sarah, PPO, DOB 1984-03-12), `MEM-445566` (Miguel, HMO, DOB 1979-11-02), `MEM-778899` (terminated coverage, DOB 1991-06-25); providers NPI `1234567893` / TIN `998877665` and NPI `1987654320` / TIN `112233445`; claims `CLM-112233` (denied duplicate), `CLM-112200` (paid), `CLM-334455` (pended), `CLM-556677` (denied, no prior auth), `CLM-667788` (paid); CPT codes 99213, 99214, 70553, 73721, 27447, 97110, 90834.

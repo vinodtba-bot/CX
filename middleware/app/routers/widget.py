@@ -22,6 +22,12 @@ from ..services.tools import ToolContext
 
 router = APIRouter(prefix="/api/v1/widget", tags=["widget"])
 
+# Greeting the widget already showed for each Retell chat, until its first
+# reply. A Retell chat agent may send its begin message with its first reply,
+# or (with a blank begin message) nothing at all; either way the member should
+# see one greeting and an answer to their first question.
+_SHOWN_GREETINGS: dict[str, str] = {}
+
 
 def _new_session(call_id: str, channel: str, ident: PortalIdentity, agent_id: str | None) -> CallSession:
     return CallSession(
@@ -104,22 +110,35 @@ async def start_chat(ident: PortalIdentity = Depends(require_portal_identity),
     agent_id = settings.retell_member_chat_agent_id if ident.persona == "member" else settings.retell_provider_chat_agent_id
     first_name = await _first_name(ident)
     greeting_name = f", {first_name}" if first_name else ""
+    greeting = f"Hi{greeting_name}! I'm the {cfg['payer_name']} virtual assistant. "
     if settings.retell_api_key and agent_id:
+        greeting += "How can I help you today?"
         placeholder = _new_session("pending", "chat", ident, agent_id)
-        dv = build_dynamic_variables(placeholder, cfg, {"first_name": first_name})
-        resp = await retell_api.create_chat(agent_id, dv, {"payer_organization_id": settings.payer_org_id, "persona": ident.persona})
+        # The agent's begin message should be {{greeting}}, so it says the same.
+        dv = build_dynamic_variables(placeholder, cfg, {"first_name": first_name, "greeting": greeting})
+        try:
+            resp = await retell_api.create_chat(agent_id, dv, {"payer_organization_id": settings.payer_org_id, "persona": ident.persona})
+        except retell_api.RetellAPIError as e:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Could not start the chat") from e
         chat_id, mode = resp["chat_id"], "retell"
+        # If Retell already produced the agent's begin message, show that instead.
+        begin = _agent_text(resp.get("message_with_tool_calls") or [])
+        if begin:
+            greeting = "\n\n".join(begin)
+        _SHOWN_GREETINGS[chat_id] = greeting
     elif settings.demo_mode:
         chat_id, mode = f"simchat_{uuid.uuid4().hex[:16]}", "simulated"
+        greeting += simulated_agent.help_text(ident.persona)
+        simulated_agent.TRANSCRIPTS[chat_id] = [("Agent", greeting)]
     else:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Chat agent is not configured")
     db.add(_new_session(chat_id, "chat", ident, agent_id or None))
     await audit(db, actor=f"portal:{ident.subject}", action="chat.start", outcome="ok", call_id=chat_id, detail={"mode": mode})
-    greeting = f"Hi{greeting_name}! I'm the {cfg['payer_name']} virtual assistant. "
-    greeting += simulated_agent.help_text(ident.persona) if mode == "simulated" else "How can I help you today?"
-    if mode == "simulated":
-        simulated_agent.TRANSCRIPTS[chat_id] = [("Agent", greeting)]
     return {"chat_id": chat_id, "mode": mode, "greeting": greeting}
+
+
+def _agent_text(messages: list[dict]) -> list[str]:
+    return [m["content"] for m in messages if m.get("role") == "agent" and m.get("content")]
 
 
 async def _owned_session(chat_id: str, ident: PortalIdentity, db: AsyncSession) -> CallSession:
@@ -142,10 +161,22 @@ async def send_chat_message(chat_id: str, body: ChatMessageIn,
                           max_verification_attempts=settings.max_verification_attempts)
         return {"messages": [{"role": "agent", "content": await simulated_agent.respond(ctx, body.content)}]}
     try:
-        resp = await retell_api.create_chat_completion(chat_id, body.content)
+        replies = _agent_text((await retell_api.create_chat_completion(chat_id, body.content)).get("messages", []))
+        shown = _SHOWN_GREETINGS.pop(chat_id, None)
+        if shown is not None:
+            replies = [r for r in replies if _norm(r) != _norm(shown)]
+            if not replies:
+                # The first turn produced only the begin message (or nothing, when
+                # the agent's begin message is blank): the agent opened the chat
+                # instead of answering, so ask again to get the actual answer.
+                replies = _agent_text((await retell_api.create_chat_completion(chat_id, body.content)).get("messages", []))
     except retell_api.RetellAPIError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Assistant is unavailable") from e
-    return {"messages": [{"role": "agent", "content": m["content"]} for m in resp.get("messages", []) if m.get("role") == "agent"]}
+    return {"messages": [{"role": "agent", "content": r} for r in replies]}
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.split()).casefold()
 
 
 @router.post("/chat/{chat_id}/end", status_code=204)
@@ -169,6 +200,7 @@ async def end_chat(chat_id: str,
             sentiment="Unknown", call_successful=bool(tools), tools_used=tools,
         ))
     else:
+        _SHOWN_GREETINGS.pop(chat_id, None)
         try:
             await retell_api.end_chat(chat_id)
         except retell_api.RetellAPIError:
